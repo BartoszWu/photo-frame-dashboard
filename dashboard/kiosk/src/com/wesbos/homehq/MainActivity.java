@@ -150,6 +150,8 @@ public class MainActivity extends Activity {
   private final BroadcastReceiver networkChange = new BroadcastReceiver() {
     @Override
     public void onReceive(Context context, Intent intent) {
+      if (Intent.ACTION_TIME_CHANGED.equals(intent.getAction())
+          || Intent.ACTION_TIMEZONE_CHANGED.equals(intent.getAction())) ScreenSchedule.reconcile(MainActivity.this);
       if (!resumed || retryUrl == null || offline.getVisibility() != View.VISIBLE || !wifiConnected()) return;
       Log.i(TAG, "Wi-Fi connected or clock changed, retrying now");
       showOffline();
@@ -186,6 +188,8 @@ public class MainActivity extends Activity {
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
+    MorningReturn.restore(this);
+    ScreenSchedule.homeStarted(this);
     applyDebugFlag(getIntent());
     applyHomeFlag(getIntent());
     applyBootanimFlag(getIntent());
@@ -330,6 +334,7 @@ public class MainActivity extends Activity {
     @SuppressWarnings("deprecation")
     IntentFilter connectivity = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
     connectivity.addAction(Intent.ACTION_TIME_CHANGED); // network time arrived after a power cut
+    connectivity.addAction(Intent.ACTION_TIMEZONE_CHANGED);
     registerReceiver(networkChange, connectivity);
   }
 

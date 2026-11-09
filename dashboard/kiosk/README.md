@@ -149,6 +149,131 @@ Host regression checks cover late errors, probe completion and retry ordering. F
 captive-portal recovery on this revision, and other Android versions, remain untested on hardware.
 Keep a working Settings route and the existing signing key when updating an installed kiosk.
 
+## F10 weekday screen schedule (November 2026)
+
+The full screen schedule is opt-in and targets Android 6 / API 23. It turns the
+screen on and shows Home HQ Monday-Friday at 07:00, then locks the screen at 16:00.
+Weekends are outside the on window. It replaces the older daily 07:01 foreground
+return when enabled. Disable Frameo's sleep schedule before enabling this controller.
+
+The F10 refused to cold-start Frameo's schedule and boot receivers (`process is bad`)
+in a controlled test; warm Frameo could sleep/wake the same display. The new controller
+uses direct Activity PendingIntents and owns both boundaries instead of depending on
+Frameo's process. It uses no root or network service. The only Device Admin policy is
+`force-lock`; `WAKE_LOCK` supplies a five-second wake pulse on API 23.
+
+After the owner's approval, install with `adb -s "$ANDROID_SERIAL" install -r kiosk/build/homehq.apk`,
+open Home HQ once, and activate only the screen-lock administrator:
+
+```sh
+adb -s "$ANDROID_SERIAL" shell dpm set-active-admin com.wesbos.homehq/.ScreenAdmin
+adb -s "$ANDROID_SERIAL" shell am broadcast --user 0 -n com.wesbos.homehq/.ScreenControlReceiver --es command status
+```
+
+Use the same broadcast with command `test` for a real RTC alarm cycle (sleep in 60 s,
+wake in 150 s) while production is disabled. `test-screen-schedule-device.py` checks
+actual OFF/ON states, evicts the Home HQ process between events, checks the focused
+window, and waits past the temporary wake lock. It changes the foreground and uses
+root only for that diagnostic process eviction. It does not enable production or
+edit Frameo settings. Run only with the owner's consent and an awake screen:
+
+```sh
+python3 kiosk/test-screen-schedule.py
+python3 -u kiosk/test-screen-schedule-device.py /path/to/test-observations.json
+```
+
+Once reviewed, `enable` activates Mon-Fri 07:00-16:00, disables the legacy morning
+return, and immediately reconciles the current screen state. Outside the on window,
+this means it will sleep immediately. `disable` cancels this schedule and test alarms;
+`cancel-test` cancels only the diagnostic cycle. Control broadcasts require the system
+sender permission DUMP; ordinary apps/pages cannot configure the schedule.
+
+Boot, time/time-zone changes, package updates, and ordinary Home startup restore the
+next boundaries. Home startup also reconciles the display after five seconds, because
+the vendor can drop BOOT_COMPLETED. A factory date older than the saved clock floor is
+ignored until network time arrives; Home's dynamic clock receiver then reconciles.
+Manual wake of an already running activity does not recreate Home. Restarting Home
+outside work hours does reconcile it back to sleep. An unplugged/unpowered frame
+cannot wake itself, and a secure keyguard would still need legitimate unlocking.
+
+For rollback, first send `disable`, then `remove-admin`, and reinstall the same-signed
+backup with `install -r`. Do not uninstall. `remove-admin` removes this app's admin;
+it does not alter other administrators. Previous Frameo/07:01 controllers are not
+silently re-enabled when this feature is disabled. Review their state explicitly.
+
+Earlier F10 builds passed short RTC sleep/wake cycles with the Home process killed while asleep,
+and restoration after reboot/time synchronization. This rebased build still requires a fresh
+hardware test before installation or activation.
+
+The older morning-return section below documents the previous solution only.
+
+## Legacy morning return on Veidoo F10 (Android 6 only)
+
+This local adaptation adds one opt-in return to Home HQ at **07:01 in the frame's
+time zone**. Keep Frameo's existing sleep/wake schedule; its morning wake must
+finish before 07:01. This is deliberately restricted to API 23: background activity
+launches on newer Android versions need a separate design and verification.
+
+`AlarmManager.setExactAndAllowWhileIdle` holds an immutable activity PendingIntent.
+Its private NoDisplay activity checks the time and screen state, then requests the
+existing Home HQ Home task (or MainActivity if the Home alias is disabled). A request
+is not proof of foreground success on vendor firmware. This F10 refused to cold-start
+a broadcast receiver after process eviction (`process is bad`), so a broadcast-only
+alarm was tested and rejected. Activity alarms use the normal activity launch path.
+There is no service or polling. The alarm wakes the CPU, but does not turn on the
+display: a noninteractive device is skipped without retry. Deliveries more than
+five minutes late are skipped. Frameo can implement a black screen in an activity,
+so `isInteractive()` cannot prove that Frameo's own sleep mode has finished.
+
+The next 07:01 is recalculated as a calendar date (including DST), not 24 hours.
+BOOT_COMPLETED, clock/time-zone changes, package updates, and ordinary Home HQ
+starts restore the next alarm when enabled. Boot never launches Home HQ from this
+receiver or replays a missed morning. Test alarms are discarded after reboot.
+Force-stop cancels Android alarms: manually open Home HQ again to restore the daily
+alarm. A powered-off frame cannot execute an alarm.
+
+Daily return is disabled by default. The control receiver requires the sender's
+system `android.permission.DUMP`, which the F10 ADB shell has; ordinary apps and
+web pages cannot configure it. No new permission grant or root is required.
+Existing kiosk security characteristics, including the debug signing key and
+exported URL-setting activity, are unchanged. Keep ADB restricted to trusted USB.
+
+After installing an update, launch Home HQ once. This F10 temporarily marked the
+app's process bad after replacement and dropped broadcasts until that launch:
+
+```sh
+adb -s "$ANDROID_SERIAL" shell am start -n com.wesbos.homehq/.Home
+adb -s "$ANDROID_SERIAL" shell am broadcast --user 0 -n com.wesbos.homehq/.MorningControlReceiver --es command status
+```
+
+Run the isolated two-minute test **before enabling the daily alarm** (screen awake,
+owner approval required). It puts Frameo in front, requests ordinary Home HQ
+background-process eviction, checks actual foreground after the alarm, and disables
+the feature at the end. It never changes Frameo's settings or force-stops an app:
+
+```sh
+python3 kiosk/test-morning.py          # host recurrence/late-delivery tests
+python3 -u kiosk/test-morning-device.py # live USB test; daily must be disabled
+```
+
+Only after reviewing the result, enable the real schedule:
+
+```sh
+adb -s "$ANDROID_SERIAL" shell am broadcast --user 0 -n com.wesbos.homehq/.MorningControlReceiver --es command enable
+adb -s "$ANDROID_SERIAL" shell 'dumpsys alarm | grep -A7 -B2 com.wesbos.homehq'
+```
+
+To disable both daily and pending test alarms, use the same broadcast with
+`--es command disable`. `--es command test` arms one alarm 120 seconds later without
+enabling the daily schedule. `status` reports the persisted settings; `dumpsys alarm`
+is the separate check that Android actually holds an alarm.
+
+Back up the installed APK before replacing it (`pm path com.wesbos.homehq`, then
+`adb pull` the returned path). To revert, disable the alarms, then reinstall that
+APK with `adb -s "$ANDROID_SERIAL" install -r /path/to/homehq-original.apk` and open Home HQ.
+Do not uninstall: `install -r` preserves the saved URL and app data. A rollback must
+use the same signing certificate; the original and this build were compared.
+
 ## Screen density
 
 The dashboard is laid out for 1280×800 at density 160. On wider screens, such as 1920×1080 frames,

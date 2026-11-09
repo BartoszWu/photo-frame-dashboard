@@ -47,6 +47,8 @@ SOURCES = {
     "android/content/Intent.java": """package android.content;
 public class Intent {
   public static final int FLAG_ACTIVITY_NEW_TASK=1, FLAG_ACTIVITY_CLEAR_TOP=2;
+  public static final String ACTION_TIME_CHANGED="time", ACTION_TIMEZONE_CHANGED="zone";
+  public String getAction() { return null; }
   public Class<?> target; public int flags;
   public Intent() {} public Intent(Context c, Class<?> t) { target=t; }
   public Intent addFlags(int f) { flags |= f; return this; }
@@ -70,6 +72,7 @@ public class Activity extends Context {
 }""",
     str(PACKAGE / "Fakes.java"): """package com.wesbos.homehq;
 import java.util.*;
+class ScreenSchedule { static void reconcile(android.content.Context c) {} }
 class NavigationService { static boolean visible; static void setDashboardVisible(boolean v) { visible=v; }}
 class WebView {
   boolean timersPaused, paused;
