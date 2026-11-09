@@ -149,7 +149,7 @@ Host regression checks cover late errors, probe completion and retry ordering. F
 captive-portal recovery on this revision, and other Android versions, remain untested on hardware.
 Keep a working Settings route and the existing signing key when updating an installed kiosk.
 
-## F10 weekday screen schedule (November 2026)
+## F10 screen schedule (Android 6 only)
 
 The full screen schedule is opt-in and targets Android 6 / API 23. It turns the
 screen on and shows Home HQ Monday-Friday at 07:00, then locks the screen at 16:00.
@@ -179,10 +179,12 @@ edit Frameo settings. Run only with the owner's consent and an awake screen:
 
 ```sh
 python3 kiosk/test-screen-schedule.py
+python3 kiosk/test-screen-origin.py
+python3 kiosk/test-screen-save.py
 python3 -u kiosk/test-screen-schedule-device.py /path/to/test-observations.json
 ```
 
-Once reviewed, `enable` activates Mon-Fri 07:00-16:00, disables the legacy morning
+Once reviewed, `enable` activates the saved profile (Mon-Fri 07:00-16:00 by default), disables the legacy morning
 return, and immediately reconciles the current screen state. Outside the on window,
 this means it will sleep immediately. `disable` cancels this schedule and test alarms;
 `cancel-test` cancels only the diagnostic cycle. Control broadcasts require the system
@@ -204,6 +206,68 @@ silently re-enabled when this feature is disabled. Review their state explicitly
 Earlier F10 builds passed short RTC sleep/wake cycles with the Home process killed while asleep,
 and restoration after reboot/time synchronization. This rebased build still requires a fresh
 hardware test before installation or activation.
+
+### Configure from the dashboard
+
+The compatible HomeView Mini dashboard adds **Settings → Ekran**: selected wake days,
+local wake/sleep times, an on/off switch and the next scheduled wake. All selected days
+share one time window. If sleep is earlier than wake, sleep occurs on the following day.
+The selected day is always the wake day; a Sunday 22:00–06:00 window ends on Monday.
+At least one day and two different valid HH:MM times are required even while disabled.
+Times follow the frame's timezone, not the browser's timezone. Spring-forward times
+move to the first valid minute; a collapsed interval is skipped. A repeated autumn
+minute occurs once, at its first occurrence.
+
+After reviewing the APK and dashboard together, pair the dashboard's local origin once
+through the DUMP-protected ADB control receiver. The example below uses loopback only
+for a local test; replace it with your own dashboard origin (scheme, hostname and port,
+no path/query/token). Set `ANDROID_SERIAL` explicitly to the approved test device.
+Pairing does not enable or change the schedule. Reload the dashboard after pairing.
+
+```sh
+adb -s "$ANDROID_SERIAL" shell am broadcast --user 0 -n com.wesbos.homehq/.ScreenControlReceiver --es command pair-dashboard --es origin http://127.0.0.1:8898
+```
+
+Only local IPv4 origins, localhost and `.local` names are accepted. The origin is stored
+separately from the legacy activity's editable URL; changing that URL cannot grant access
+to another website. The native channel goes to the top-level pinned origin only, closes
+on navigation/destruction and is not exposed to the captive-portal flow. There is no
+JavaScriptInterface, root command or HTTP write endpoint. HTTP on a LAN does not protect
+against a compromised LAN/server; native confirmation is still required for every save.
+
+A real screen touch on **Zapisz zmiany**, then a native Android confirmation, are both
+required. The native dialog repeats days/hours and explicitly warns if saving will put
+the screen to sleep now. Cancellation keeps the existing profile. The configuration and
+revision are committed together before alarms are rearmed; stale revisions are rejected.
+The UI applies a save only after native acknowledgment. A successful save rechecks the
+current window after one second, so saving outside the window can immediately sleep.
+Disabling cancels this controller's alarms; it does not re-enable Frameo or legacy alarms.
+
+For a fresh installation, initial admin activation and `enable` still need the reviewed
+ADB setup above while the frame has correct synchronized time. This establishes the
+clock floor; the web UI cannot bootstrap around this safeguard. An existing enabled
+installation retains its profile/admin/clock floor when updated with the same signer.
+Never run two independent screen controllers at once.
+
+To revoke the web channel without changing the schedule, use `unpair-dashboard` and
+reload the page. The old page also loses native authorization immediately. Review the
+saved profile before a rollback: an older APK ignores custom day/time keys and may
+restore its fixed weekday profile. Disable the controller before downgrading.
+
+Protocol version 1 uses an origin-targeted `homehq-screen` greeting with a transferred
+WebMessagePort. Requests and responses are JSON strings. Requests are `{id,type:"get"}`
+or `{id,type:"save",revision,enabled,days,wake,sleep}`; `days` contains unique ISO values
+1–7 (Monday–Sunday). Replies are `{id,ok:true,state}` or `{id,ok:false,error,message}`.
+State includes `enabled`, `admin`, `days`, `wake`, `sleep`, `revision`, IANA `zone`,
+`clockReady`, and epoch-millisecond `nextWakeAt`/`nextSleepAt` (zero when disabled).
+Save checks types/unknown fields, API 23, admin/time readiness, fresh touch and revision
+again before commit. A disk-write failure restores the previous in-memory profile and
+attempts to restore disk state; inspect storage/state before retrying or rebooting.
+No browser-storage or server-side fallback can write a profile.
+
+The new bridge and the rebased APK require an approved API 23 hardware test before
+rollout. Browser protocol fakes and host tests do not prove WebView port transfer,
+real touch delivery, Device Admin behavior or cold-process RTC delivery on this build.
 
 The older morning-return section below documents the previous solution only.
 

@@ -13,7 +13,11 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
 import java.util.Date;
+import java.util.Map;
 import java.util.TimeZone;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /** One owner of the F10 screen schedule; no Frameo, root, network, or resident service. */
 final class ScreenSchedule {
@@ -50,6 +54,63 @@ final class ScreenSchedule {
   private static boolean enabled(Context c) {
     return prefs(c).getBoolean("enabled", false);
   }
+  static ScreenScheduleConfig configuration(Context c) {
+    SharedPreferences p = prefs(c);
+    return new ScreenScheduleConfig(p.getInt("days_mask", 31),
+        p.getInt("wake_minute", 420), p.getInt("sleep_minute", 960));
+  }
+  static int revision(Context c) { return prefs(c).getInt("revision", 0); }
+
+  static JSONObject state(Context c) throws JSONException {
+    ScreenScheduleConfig config = configuration(c);
+    JSONArray days = new JSONArray();
+    for (int i = 0; i < 7; i++) if ((config.daysMask & (1 << i)) != 0) days.put(i + 1);
+    return new JSONObject().put("enabled", enabled(c)).put("admin", hasAdmin(c))
+        .put("days", days).put("wake", ScreenScheduleConfig.time(config.wakeMinute))
+        .put("sleep", ScreenScheduleConfig.time(config.sleepMinute)).put("revision", revision(c))
+        .put("zone", TimeZone.getDefault().getID()).put("clockReady", trustedClock(c))
+        .put("nextWakeAt", enabled(c) ? prefs(c).getLong("wake_due", 0) : 0)
+        .put("nextSleepAt", enabled(c) ? prefs(c).getLong("sleep_due", 0) : 0);
+  }
+
+  /** Persist first, schedule second; the native confirmation decides when to reconcile. */
+  static void save(Context c, ScreenScheduleConfig config, boolean active, int expectedRevision) {
+    if (expectedRevision != revision(c)) throw new IllegalStateException("stale_revision");
+    if (expectedRevision == Integer.MAX_VALUE) throw new IllegalStateException("revision_limit");
+    if (Build.VERSION.SDK_INT != 23) throw new IllegalStateException("unsupported_device");
+    if (active && !hasAdmin(c)) throw new IllegalStateException("admin_required");
+    if (active && !trustedClock(c)) {
+      throw new IllegalStateException("clock_not_ready");
+    }
+    SharedPreferences storage = prefs(c);
+    Map<String, ?> before = storage.getAll();
+    SharedPreferences.Editor edit = storage.edit().putInt("days_mask", config.daysMask)
+        .putInt("wake_minute", config.wakeMinute).putInt("sleep_minute", config.sleepMinute)
+        .putInt("revision", expectedRevision + 1).putBoolean("enabled", active);
+    if (!active) edit.remove("wake_due").remove("sleep_due");
+    if (!edit.commit()) {
+      // Android updates its in-memory prefs even when disk commit fails. Restore the old
+      // view before returning an error; disk recovery is best effort and must be inspected.
+      SharedPreferences.Editor rollback = storage.edit();
+      for (String key : new String[]{"days_mask", "wake_minute", "sleep_minute", "revision", "enabled", "wake_due", "sleep_due"}) {
+        Object old = before.get(key);
+        if (old instanceof Integer) rollback.putInt(key, (Integer) old);
+        else if (old instanceof Long) rollback.putLong(key, (Long) old);
+        else if (old instanceof Boolean) rollback.putBoolean(key, (Boolean) old);
+        else rollback.remove(key);
+      }
+      rollback.commit();
+      throw new IllegalStateException("storage_failed");
+    }
+    cancelTest(c);
+    if (active) {
+      MorningReturn.disable(c);
+      restore(c);
+    } else {
+      alarms(c).cancel(pending(c, WAKE));
+      alarms(c).cancel(pending(c, SLEEP));
+    }
+  }
   private static boolean trustedClock(Context c) {
     // This frame boots with a factory date before network time arrives.
     return System.currentTimeMillis() >= prefs(c).getLong("clock_floor", Long.MAX_VALUE);
@@ -61,12 +122,14 @@ final class ScreenSchedule {
     // Replace the older, daily 07:01 foreground-only return, rather than running both.
     MorningReturn.disable(c);
     prefs(c).edit().putBoolean("enabled", true)
+        .putInt("revision", revision(c) + 1)
         .putLong("clock_floor", System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000).commit();
     reconcile(c);
   }
 
   static void disable(Context c) {
-    prefs(c).edit().putBoolean("enabled", false).remove("wake_due").remove("sleep_due").commit();
+    prefs(c).edit().putBoolean("enabled", false).putInt("revision", revision(c) + 1)
+        .remove("wake_due").remove("sleep_due").commit();
     alarms(c).cancel(pending(c, WAKE));
     alarms(c).cancel(pending(c, SLEEP));
     cancelTest(c);
@@ -81,8 +144,9 @@ final class ScreenSchedule {
     }
     long now = System.currentTimeMillis();
     TimeZone zone = TimeZone.getDefault();
-    long wake = ScreenScheduleTime.next(now, zone, true);
-    long sleep = ScreenScheduleTime.next(now, zone, false);
+    ScreenScheduleConfig config = configuration(c);
+    long wake = ScreenScheduleTime.next(now, zone, true, config);
+    long sleep = ScreenScheduleTime.next(now, zone, false, config);
     prefs(c).edit().putLong("wake_due", wake).putLong("sleep_due", sleep).commit();
     alarms(c).setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wake, pending(c, WAKE));
     alarms(c).setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, sleep, pending(c, SLEEP));
@@ -92,7 +156,7 @@ final class ScreenSchedule {
   static void reconcile(Context c) {
     restore(c);
     if (!enabled(c) || !trustedClock(c) || Build.VERSION.SDK_INT != 23) return;
-    if (ScreenScheduleTime.awake(System.currentTimeMillis(), TimeZone.getDefault())) wake(c);
+    if (ScreenScheduleTime.awake(System.currentTimeMillis(), TimeZone.getDefault(), configuration(c))) wake(c);
     else sleep(c);
   }
 
@@ -149,7 +213,7 @@ final class ScreenSchedule {
       Log.w(TAG, "Ignored disabled, duplicate, early, or stale alarm");
       return;
     }
-    if (!test && wake != ScreenScheduleTime.awake(now, TimeZone.getDefault())) {
+    if (!test && wake != ScreenScheduleTime.awake(now, TimeZone.getDefault(), configuration(c))) {
       Log.w(TAG, "Ignored alarm outside its current working window");
       return;
     }
@@ -187,8 +251,12 @@ final class ScreenSchedule {
 
   static String status(Context c) {
     SharedPreferences p = prefs(c);
+    ScreenScheduleConfig config = configuration(c);
     return "enabled=" + enabled(c) + "; admin=" + hasAdmin(c)
-        + "; policy=Mon-Fri_07:00-16:00; zone=" + TimeZone.getDefault().getID()
+        + "; policy=" + (config.daysMask == 31 && config.wakeMinute == 420 && config.sleepMinute == 960
+            ? "Mon-Fri_07:00-16:00" : "custom") + "; zone=" + TimeZone.getDefault().getID()
+        + "; days_mask=" + config.daysMask + "; wake=" + ScreenScheduleConfig.time(config.wakeMinute)
+        + "; sleep=" + ScreenScheduleConfig.time(config.sleepMinute) + "; revision=" + revision(c)
         + "; wake_due=" + p.getLong("wake_due", 0) + "; sleep_due=" + p.getLong("sleep_due", 0)
         + "; test_sleep_due=" + p.getLong("test_sleep_due", 0)
         + "; test_wake_due=" + p.getLong("test_wake_due", 0)

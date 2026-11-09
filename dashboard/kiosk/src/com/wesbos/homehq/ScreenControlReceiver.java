@@ -14,6 +14,8 @@ public class ScreenControlReceiver extends BroadcastReceiver {
       else if ("disable".equals(command)) ScreenSchedule.disable(c);
       else if ("test".equals(command)) ScreenSchedule.test(c);
       else if ("cancel-test".equals(command)) ScreenSchedule.cancelTest(c);
+      else if ("pair-dashboard".equals(command)) ScreenSettingsBridge.pair(c, intent.getStringExtra("origin"));
+      else if ("unpair-dashboard".equals(command)) ScreenSettingsBridge.unpair(c);
       else if ("remove-admin".equals(command)) {
         ScreenSchedule.disable(c);
         ((DevicePolicyManager) c.getSystemService(Context.DEVICE_POLICY_SERVICE))

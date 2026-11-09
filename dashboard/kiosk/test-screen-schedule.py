@@ -23,6 +23,17 @@ public class ScreenScheduleHarness {
     }
     System.out.println("PASS " + name);
   }
+  static void custom(String name, int mask, String wake, String sleep, String now, boolean on, String nextWake, String nextSleep) {
+    ScreenScheduleConfig c = new ScreenScheduleConfig(mask, ScreenScheduleConfig.parseTime(wake), ScreenScheduleConfig.parseTime(sleep));
+    if (ScreenScheduleTime.awake(at(now), WARSAW, c) != on
+        || ScreenScheduleTime.next(at(now), WARSAW, true, c) != at(nextWake)
+        || ScreenScheduleTime.next(at(now), WARSAW, false, c) != at(nextSleep)) throw new AssertionError(name);
+    System.out.println("PASS " + name);
+  }
+  static void invalid(String name, Runnable action) {
+    try { action.run(); } catch (IllegalArgumentException expected) { System.out.println("PASS " + name); return; }
+    throw new AssertionError(name);
+  }
   static void timely(String name, long now, long due, boolean expected) {
     if (ScreenScheduleTime.timely(now, due) != expected) throw new AssertionError(name);
     System.out.println("PASS " + name);
@@ -48,6 +59,20 @@ public class ScreenScheduleHarness {
     next("Autumn DST wake", "2026-10-23T16:00:00Z", true, "2026-10-26T06:00:00Z");
     next("Autumn DST sleep", "2026-10-23T16:00:00Z", false, "2026-10-26T15:00:00Z");
     next("Year boundary", "2026-12-31T20:00:00Z", true, "2027-01-01T06:00:00Z");
+    custom("Saturday-only window", 32, "09:15", "17:45", "2026-11-14T08:30:00Z", true, "2026-11-21T08:15:00Z", "2026-11-14T16:45:00Z");
+    custom("Sunday overnight starts", 64, "22:00", "06:00", "2026-11-08T21:00:00Z", true, "2026-11-15T21:00:00Z", "2026-11-09T05:00:00Z");
+    custom("Overnight spill into unselected Monday", 64, "22:00", "06:00", "2026-11-09T04:59:59Z", true, "2026-11-15T21:00:00Z", "2026-11-09T05:00:00Z");
+    custom("Overnight end is exclusive", 64, "22:00", "06:00", "2026-11-09T05:00:00Z", false, "2026-11-15T21:00:00Z", "2026-11-16T05:00:00Z");
+    custom("Spring gap uses first valid minute", 64, "02:30", "04:00", "2026-03-28T12:00:00Z", false, "2026-03-29T01:00:00Z", "2026-03-29T02:00:00Z");
+    custom("Spring normalized window is active", 64, "02:30", "04:00", "2026-03-29T01:05:00Z", true, "2026-04-05T00:30:00Z", "2026-03-29T02:00:00Z");
+    custom("Window wholly inside DST gap is skipped", 64, "02:30", "03:00", "2026-03-28T12:00:00Z", false, "2026-04-05T00:30:00Z", "2026-04-05T01:00:00Z");
+    custom("Autumn end uses first occurrence", 32, "20:00", "02:30", "2026-10-24T18:01:00Z", true, "2026-10-31T19:00:00Z", "2026-10-25T00:30:00Z");
+    custom("Autumn repeated hour does not reopen window", 32, "20:00", "02:30", "2026-10-25T01:15:00Z", false, "2026-10-31T19:00:00Z", "2026-11-01T01:30:00Z");
+    invalid("No selected days rejected", () -> new ScreenScheduleConfig(0, 420, 960));
+    invalid("Unknown day bits rejected", () -> new ScreenScheduleConfig(128, 420, 960));
+    invalid("Equal hours rejected", () -> new ScreenScheduleConfig(31, 420, 420));
+    invalid("Out-of-day hour rejected", () -> new ScreenScheduleConfig(31, 1440, 960));
+    for (String value : new String[]{"7:00", "24:00", "07:60", "-1:00", "07:00:00", "javascript:1"}) invalid("Invalid time " + value, () -> ScreenScheduleConfig.parseTime(value));
     timely("Unarmed ignored", 1000, 0, false);
     timely("Early ignored", 999, 1000, false);
     timely("On time accepted", 1000, 1000, true);
@@ -59,5 +84,5 @@ public class ScreenScheduleHarness {
 with tempfile.TemporaryDirectory() as directory:
     test = Path(directory) / "ScreenScheduleHarness.java"
     test.write_text(harness)
-    subprocess.run(["javac", "-d", directory, str(source), str(test)], check=True)
+    subprocess.run(["javac", "-d", directory, str(source), str(source.with_name("ScreenScheduleConfig.java")), str(test)], check=True)
     subprocess.run(["java", "-cp", directory, "com.wesbos.homehq.ScreenScheduleHarness"], check=True)

@@ -8,8 +8,7 @@
   <uses-permission android:name="android.permission.WAKE_LOCK" />
   <!-- Optional; only used if granted with adb (see kiosk README). -->
   <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
-  <!-- Only used by BootReceiver, which is disabled until turned on with adb (see its class comment). -->
-  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <!-- Optional upstream boot-launch support; disabled until turned on with adb. -->
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
   <application
