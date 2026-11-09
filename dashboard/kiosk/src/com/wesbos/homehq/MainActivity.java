@@ -97,6 +97,7 @@ public class MainActivity extends Activity {
   static final long TIME_NUDGE_MS = 60 * 1000;
 
   private WebView web;
+  private ScreenSettingsBridge screenSettings;
   private Button menuButton;
   private Thread bootanimThread;
   private final Handler handler = new Handler(Looper.getMainLooper());
@@ -150,6 +151,8 @@ public class MainActivity extends Activity {
   private final BroadcastReceiver networkChange = new BroadcastReceiver() {
     @Override
     public void onReceive(Context context, Intent intent) {
+      if (Intent.ACTION_TIME_CHANGED.equals(intent.getAction())
+          || Intent.ACTION_TIMEZONE_CHANGED.equals(intent.getAction())) ScreenSchedule.reconcile(MainActivity.this);
       if (!resumed || retryUrl == null || offline.getVisibility() != View.VISIBLE || !wifiConnected()) return;
       Log.i(TAG, "Wi-Fi connected or clock changed, retrying now");
       showOffline();
@@ -186,6 +189,8 @@ public class MainActivity extends Activity {
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
+    MorningReturn.restore(this);
+    ScreenSchedule.homeStarted(this);
     applyDebugFlag(getIntent());
     applyHomeFlag(getIntent());
     applyBootanimFlag(getIntent());
@@ -195,6 +200,7 @@ public class MainActivity extends Activity {
         | WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
     web = new WebView(this);
+    screenSettings = new ScreenSettingsBridge(this, web);
     WebSettings s = web.getSettings();
     s.setJavaScriptEnabled(true);
     s.setDomStorageEnabled(true);
@@ -211,6 +217,7 @@ public class MainActivity extends Activity {
 
       @Override
       public void onPageStarted(WebView view, String url, Bitmap icon) {
+        screenSettings.close();
         pageFailed = false;
         mainUrl = url;
       }
@@ -226,6 +233,7 @@ public class MainActivity extends Activity {
         if (!pageFailed && !retryPending) {
           offline.setVisibility(View.GONE);
           handler.removeCallbacks(stall);
+          if (!portalMode) screenSettings.loaded(url);
         }
       }
 
@@ -330,6 +338,7 @@ public class MainActivity extends Activity {
     @SuppressWarnings("deprecation")
     IntentFilter connectivity = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
     connectivity.addAction(Intent.ACTION_TIME_CHANGED); // network time arrived after a power cut
+    connectivity.addAction(Intent.ACTION_TIMEZONE_CHANGED);
     registerReceiver(networkChange, connectivity);
   }
 
@@ -806,6 +815,7 @@ public class MainActivity extends Activity {
 
   @Override
   protected void onDestroy() {
+    if (screenSettings != null) screenSettings.close();
     unregisterReceiver(networkChange);
     handler.removeCallbacksAndMessages(null);
     if (web != null) web.destroy();
@@ -919,6 +929,7 @@ public class MainActivity extends Activity {
   /** Watches for the two-finger exit hold; all touches still go to the page (after a stale-touch reset). */
   @Override
   public boolean dispatchTouchEvent(MotionEvent e) {
+    if (e.getActionMasked() == MotionEvent.ACTION_UP && screenSettings != null) screenSettings.touch();
     switch (e.getActionMasked()) {
       case MotionEvent.ACTION_DOWN:
         // Android sends DOWN only when every earlier finger has lifted. If the page still holds a

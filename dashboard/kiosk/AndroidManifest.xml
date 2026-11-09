@@ -4,10 +4,11 @@
 
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
   <!-- Optional; only used if granted with adb (see kiosk README). -->
   <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
-  <!-- Only used by BootReceiver, which is disabled until turned on with adb (see its class comment). -->
-  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <!-- Optional upstream boot-launch support; disabled until turned on with adb. -->
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
   <application
@@ -17,6 +18,30 @@
       android:usesCleartextTraffic="true"
       android:networkSecurityConfig="@xml/network_security_config"
       android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+    <activity android:name=".ScreenAlarmActivity" android:exported="false"
+        android:theme="@android:style/Theme.NoDisplay" android:noHistory="true"
+        android:excludeFromRecents="true" android:taskAffinity="com.wesbos.homehq.screen" />
+    <receiver android:name=".ScreenControlReceiver" android:exported="true"
+        android:permission="android.permission.DUMP" />
+    <receiver android:name=".ScreenAdmin" android:exported="true"
+        android:label="Home HQ screen schedule"
+        android:permission="android.permission.BIND_DEVICE_ADMIN">
+      <meta-data android:name="android.app.device_admin" android:resource="@xml/screen_admin" />
+      <intent-filter><action android:name="android.app.action.DEVICE_ADMIN_ENABLED" /></intent-filter>
+    </receiver>
+    <activity android:name=".MorningAlarmActivity" android:exported="false"
+        android:theme="@android:style/Theme.NoDisplay" android:noHistory="true"
+        android:excludeFromRecents="true" android:taskAffinity="com.wesbos.homehq.morning" />
+    <receiver android:name=".MorningReceiver" android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.TIME_SET" />
+        <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
+    <receiver android:name=".MorningControlReceiver" android:exported="true"
+        android:permission="android.permission.DUMP" />
     <service android:name=".NavigationService"
         android:label="@string/navigation_label"
         android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
